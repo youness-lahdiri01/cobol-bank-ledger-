@@ -1,19 +1,12 @@
 #!/bin/bash
-# Build and run the bank ledger batch.
+# Build and run the two programs, then show the outputs.
 # Requires GnuCOBOL:  sudo apt install gnucobol   (or: brew install gnucobol)
 set -e
 cd "$(dirname "$0")"
 mkdir -p bin output
 
-echo "== Building LOADACCT =="
-cobc -x -free -o bin/loadacct LOADACCT.cbl
-
-echo "== Building BANKLEDG + INTCALC =="
-cobc -x -free -o bin/bankledg BANKLEDG.cbl INTCALC.cbl
-
-echo "== Loading master account file =="
-rm -f data/accounts.idx data/accounts.idx.dat
-./bin/loadacct
+echo "== Building BANKLEDG =="
+cobc -x -free -o bin/bankledg BANKLEDG.cbl
 
 echo "== Running daily ledger =="
 ./bin/bankledg

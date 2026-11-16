@@ -9,16 +9,14 @@
       *> Rule: for the same user on the same day, 3 failed       *
       *> logins (KO) or more raise an alert.                     *
       *>                                                          *
-      *> How it works:                                            *
-      *>  1. The COBOL SORT verb orders the log by user, then    *
-      *>     by date, so all attempts of one user on one day     *
-      *>     sit together.                                        *
-      *>  2. One sequential pass counts OK and KO per group.     *
-      *>  3. Groups with KO >= 3 are written to the report as    *
-      *>     ALERT; invalid lines go to the error file and are   *
-      *>     skipped, never aborting the run.                    *
+      *> How it works: the log file is already ordered by user   *
+      *> then by date, so all attempts of one user on one day    *
+      *> sit together. One sequential pass counts OK and KO     *
+      *> per group. Groups with KO >= 3 are written to the      *
+      *> report as ALERT; invalid lines go to the error file    *
+      *> and are skipped, never aborting the run.                *
       *>                                                          *
-      *> SOC angle: this is the batch form of the classic         *
+      *> SOC angle: this is the batch form of the classic        *
       *> brute-force detection rule (several failures in a short *
       *> window). In production the alert would feed a SIEM;     *
       *> here it is written to output/logwatch-report.txt.       *
@@ -27,9 +25,6 @@
        INPUT-OUTPUT SECTION.
        FILE-CONTROL.
            SELECT LOG-FILE ASSIGN TO "data/logins.txt"
-               ORGANIZATION IS LINE SEQUENTIAL.
-           SELECT SORT-FILE ASSIGN TO "output/sort-work".
-           SELECT SORTED-FILE ASSIGN TO "output/logins.sorted"
                ORGANIZATION IS LINE SEQUENTIAL.
            SELECT REPORT-FILE ASSIGN TO "output/logwatch-report.txt"
                ORGANIZATION IS LINE SEQUENTIAL.
@@ -44,18 +39,6 @@
            05 L-DATE       PIC X(8).
            05 L-RESULT     PIC X(2).
 
-       SD  SORT-FILE.
-       01  SORT-REC.
-           05 S-USER       PIC X(12).
-           05 S-DATE       PIC X(8).
-           05 S-RESULT     PIC X(2).
-
-       FD  SORTED-FILE.
-       01  SORTED-REC.
-           05 R-USER       PIC X(12).
-           05 R-DATE       PIC X(8).
-           05 R-RESULT     PIC X(2).
-
        FD  REPORT-FILE.
        01  REPORT-REC      PIC X(120).
 
@@ -64,8 +47,8 @@
 
        WORKING-STORAGE SECTION.
        01  WS-THRESHOLD       PIC 9(2) VALUE 3.
-       01  WS-SORTED-EOF      PIC X VALUE "N".
-           88 SORTED-EOF       VALUE "Y".
+       01  WS-EOF             PIC X VALUE "N".
+           88 END-OF-FILE      VALUE "Y".
        01  WS-FIRST-GROUP     PIC X VALUE "Y".
            88 FIRST-GROUP      VALUE "Y".
        01  WS-CUR-USER        PIC X(12).
@@ -76,55 +59,36 @@
        01  WS-CNT-INVALID     PIC 9(5) VALUE 0.
        01  WS-CNT-GROUPS      PIC 9(5) VALUE 0.
        01  WS-CNT-ALERTS      PIC 9(5) VALUE 0.
-       01  WS-TODAY.
-           05 WS-YEAR         PIC 9(4).
-           05 WS-MONTH        PIC 9(2).
-           05 WS-DAY          PIC 9(2).
-           05 WS-REST         PIC X(10).
-       01  WS-REPORT-DATE     PIC X(10).
        01  WS-REASON          PIC X(30).
        01  WS-ATTEMPTS        PIC 9(5).
        01  WS-STATUS          PIC X(22).
 
        PROCEDURE DIVISION.
        MAIN-PARA.
-           MOVE FUNCTION CURRENT-DATE TO WS-TODAY
-           STRING WS-DAY "/" WS-MONTH "/" WS-YEAR
-               DELIMITED BY SIZE INTO WS-REPORT-DATE
-           END-STRING
-      *>    Step 1: sort the log by user, then date.
-           SORT SORT-FILE
-               ON ASCENDING KEY S-USER S-DATE
-               USING LOG-FILE
-               GIVING SORTED-FILE
-      *>    Step 2: one pass over the sorted log.
-           OPEN INPUT SORTED-FILE
+           OPEN INPUT LOG-FILE
            OPEN OUTPUT REPORT-FILE ERROR-FILE
            PERFORM WRITE-HEADER
-           PERFORM READ-SORTED
-           PERFORM UNTIL SORTED-EOF
+           PERFORM READ-LOG
+           PERFORM UNTIL END-OF-FILE
                ADD 1 TO WS-CNT-READ
                PERFORM PROCESS-LINE
-               PERFORM READ-SORTED
+               PERFORM READ-LOG
            END-PERFORM
            PERFORM FLUSH-GROUP
            PERFORM WRITE-TRAILER
-           CLOSE SORTED-FILE REPORT-FILE ERROR-FILE
+           CLOSE LOG-FILE REPORT-FILE ERROR-FILE
            DISPLAY "LOGWATCH finished. Lines read: " WS-CNT-READ
                    " Alerts: " WS-CNT-ALERTS
                    " Invalid: " WS-CNT-INVALID
            STOP RUN.
 
-       READ-SORTED.
-           READ SORTED-FILE
-               AT END MOVE "Y" TO WS-SORTED-EOF
+       READ-LOG.
+           READ LOG-FILE
+               AT END MOVE "Y" TO WS-EOF
            END-READ.
 
        WRITE-HEADER.
-           MOVE SPACES TO REPORT-REC
-           STRING "LOGIN WATCH REPORT - " WS-REPORT-DATE
-               DELIMITED BY SIZE INTO REPORT-REC
-           END-STRING
+           MOVE "LOGIN WATCH REPORT" TO REPORT-REC
            WRITE REPORT-REC
            MOVE SPACES TO REPORT-REC
            STRING "Rule: 3 or more failed logins (KO) for the same "
@@ -140,17 +104,17 @@
 
        PROCESS-LINE.
       *>    Validate the line before counting it.
-           IF R-USER = SPACES
+           IF L-USER = SPACES
                MOVE "INVALID LINE (NO USER ID)" TO WS-REASON
                PERFORM WRITE-ERROR
                EXIT PARAGRAPH
            END-IF
-           IF R-DATE IS NOT NUMERIC
+           IF L-DATE IS NOT NUMERIC
                MOVE "INVALID DATE" TO WS-REASON
                PERFORM WRITE-ERROR
                EXIT PARAGRAPH
            END-IF
-           IF R-RESULT NOT = "OK" AND R-RESULT NOT = "KO"
+           IF L-RESULT NOT = "OK" AND L-RESULT NOT = "KO"
                MOVE "INVALID RESULT (NOT OK/KO)" TO WS-REASON
                PERFORM WRITE-ERROR
                EXIT PARAGRAPH
@@ -158,17 +122,17 @@
       *>    New user or new day: close the previous group first.
            IF FIRST-GROUP
                MOVE "N" TO WS-FIRST-GROUP
-               MOVE R-USER TO WS-CUR-USER
-               MOVE R-DATE TO WS-CUR-DATE
+               MOVE L-USER TO WS-CUR-USER
+               MOVE L-DATE TO WS-CUR-DATE
            ELSE
-               IF R-USER NOT = WS-CUR-USER
-                   OR R-DATE NOT = WS-CUR-DATE
+               IF L-USER NOT = WS-CUR-USER
+                   OR L-DATE NOT = WS-CUR-DATE
                    PERFORM FLUSH-GROUP
-                   MOVE R-USER TO WS-CUR-USER
-                   MOVE R-DATE TO WS-CUR-DATE
+                   MOVE L-USER TO WS-CUR-USER
+                   MOVE L-DATE TO WS-CUR-DATE
                END-IF
            END-IF
-           IF R-RESULT = "KO"
+           IF L-RESULT = "KO"
                ADD 1 TO WS-CNT-KO
            ELSE
                ADD 1 TO WS-CNT-OK
@@ -197,7 +161,7 @@
        WRITE-ERROR.
            ADD 1 TO WS-CNT-INVALID
            MOVE SPACES TO ERROR-REC
-           STRING R-USER " " R-DATE " " R-RESULT " "
+           STRING L-USER " " L-DATE " " L-RESULT " "
                   WS-REASON DELIMITED BY SIZE INTO ERROR-REC
            END-STRING
            WRITE ERROR-REC.
