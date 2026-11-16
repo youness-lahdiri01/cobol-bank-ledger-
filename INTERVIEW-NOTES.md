@@ -1,88 +1,32 @@
 # Presenting this project at the interview
 
-## The 60-second pitch
+## The 30-second pitch
 
 > "Pour préparer cet entretien, j'ai voulu écrire du vrai COBOL, pas
-> seulement le lire. J'ai construit deux petits programmes simples.
-> Le premier, c'est un batch bancaire : il charge les comptes en
-> mémoire, applique les transactions du jour — dépôts, retraits —
-> avec validation, et il édite un rapport et un fichier d'erreurs.
-> Une transaction en erreur n'arrête pas le batch : elle est
-> journalisée et le traitement continue. Le deuxième est plus proche
-> de mon domaine : un analyseur de journaux de connexion, qui
-> signale un compte à partir de trois échecs le même jour — la
-> version batch d'une règle de détection brute-force, comme celles
-> d'un SIEM. Ça compile et ça tourne avec GnuCOBOL."
+> seulement le lire. J'ai construit un petit programme simple, proche
+> de mon domaine : un analyseur de journaux de connexion. Il lit les
+> tentatives — user, date, OK ou KO — et il signale un compte à
+> partir de trois échecs le même jour. C'est la version batch d'une
+> règle de détection brute-force, comme celles qu'on écrit dans un
+> SIEM. Ça compile et ça tourne avec GnuCOBOL."
 
-## Architecture (know this by heart)
+## How it works (know this by heart)
 
-- **BANKLEDG** : lit `accounts.txt` (6 comptes) et les met dans un
-  tableau en mémoire (`OCCURS 20 TIMES`). Puis boucle sur
-  `transactions.txt`. Pour chaque transaction : validation
-  montant/type → recherche du compte dans le tableau → `EVALUATE`
-  Dépôt/Retrait → contrôle de solde → ligne de rapport. En cas
-  d'erreur : ligne dans `errors.txt`, compteur d'erreurs, on passe
-  à la suivante. Tout est en fichiers séquentiels, rien d'indexé.
-- **LOGWATCH** : lit `logins.txt` (déjà trié par user puis par
-  date), un seul passage : on compte les OK et les KO par groupe
-  (même user, même jour). À 3 KO ou plus → `ALERT` dans le rapport.
-  Lignes invalides → fichier d'erreurs, sans arrêter le run.
+- **Entrée** : `data/logins.txt` — 13 lignes, 3 champs (user, date
+  `AAAAMMJJ`, résultat OK/KO). Le fichier est déjà trié par user
+  puis par date.
+- **Un seul passage séquentiel** : on compte les OK et les KO par
+  groupe (même user, même jour). Quand le user ou le jour change,
+  on "ferme" le groupe : on écrit sa ligne dans le rapport.
+- **Règle** : 3 KO ou plus dans le groupe → `ALERT` dans
+  `output/logwatch-report.txt`.
+- **Lignes invalides** (mauvaise date, résultat autre que OK/KO,
+  user manquant) → `output/logwatch-errors.txt` avec le motif, sans
+  arrêter le programme.
+- **Seuil** : une seule constante nommée (`WS-THRESHOLD VALUE 3`) —
+  un seul endroit à changer, comme le seuil d'une règle SIEM.
 
-## Questions likely to come up — and short answers
-
-**C'est quoi un niveau 88 ?**
-Un nom de condition sur une zone : `88 DEPOSIT VALUE "D"`. Ça rend
-le code lisible — `IF DEPOSIT` au lieu de `IF T-TYPE = "D"` — et ça
-évite les valeurs magiques dispersées dans le code.
-
-**Pourquoi un tableau en mémoire pour les comptes ?**
-Parce que le fichier est petit (6 comptes) : on le charge une fois,
-puis chaque transaction cherche son compte dans le tableau avec
-`PERFORM VARYING`. Simple à expliquer et à tester. En production,
-avec des millions de comptes, on utiliserait un fichier indexé
-(VSAM KSDS) ou une base DB2 — le tableau ne passerait plus en
-mémoire.
-
-**Séquentiel, ça veut dire quoi ?**
-On lit le fichier du début à la fin, ligne par ligne — parfait
-pour les transactions du jour et pour un journal de logs. Pas
-d'accès direct par clé ici : pour trouver un compte, on parcourt
-le tableau.
-
-**Comment on gère une erreur en batch ?**
-On ne laisse pas le job planter sur la première anomalie : chaque
-transaction est validée, les erreurs sont journalisées avec leur
-motif, les compteurs alimentent le résumé du rapport, et le
-programme continue avec la transaction suivante.
-
-**Qu'est-ce qui manque pour que ce soit "production" ?**
-La persistance (DB2 ou fichier indexé au lieu d'un tableau en
-mémoire), la gestion des reprises (restart après abend), la
-concurrence, et les tests automatisés. C'est un projet
-d'apprentissage — je le dis honnêtement, je ne prétends pas à une
-expérience mainframe.
-
-## Numbers to remember
-
-- 8 transactions testées : 4 appliquées, 4 rejetées
-- Comptes : 1000000001 → 15 500,00 après dépôt de 500,00 ;
-  1000000002 → 4 200,50 après retrait de 1 000,00 puis dépôt de 2 000,00
-- Tableau : 20 comptes max, 6 dans le fichier d'exemple
-
-## LOGWATCH — the second program (security angle)
-
-**The 30-second pitch:**
-
-> "Le deuxième programme est plus proche de mon domaine : un
-> analyseur de journaux de connexion. Il lit les tentatives — user,
-> date, OK ou KO — et il signale un compte à partir de trois échecs
-> le même jour. C'est la version batch d'une règle de détection
-> brute-force, comme celles qu'on écrit dans un SIEM. La démo montre
-> les trois cas : deux échecs, ça ne déclenche rien ; trois échecs,
-> alerte ; une ligne invalide, rejetée proprement sans arrêter le
-> traitement."
-
-**How to demo it with the recruiter:**
+## How to demo it with the recruiter
 
 1. Show `data/logins.txt` — 13 lignes, 3 champs, lisible.
 2. Explain the rule: même user + même jour + 3 KO = ALERT.
@@ -91,10 +35,15 @@ expérience mainframe.
    `amrani` 2 KO → ok, `idrissi` 1 + 2 KO sur deux jours → ok,
    `bennis` 16/11 2 KO → ok. Then `output/logwatch-errors.txt`:
    la ligne `ZZ` rejetée avec son motif.
-4. Point out the threshold is one named constant (`WS-THRESHOLD`
-   VALUE 3) — easy to tune, like a SIEM rule threshold.
+4. Point out the threshold is one named constant — easy to tune,
+   like a SIEM rule threshold.
 
-**Questions likely to come up — and short answers:**
+## Questions likely to come up — and short answers
+
+**C'est quoi un niveau 88 ?**
+Un nom de condition sur une zone : `88 FIRST-GROUP VALUE "Y"`.
+Ça rend le code lisible — `IF FIRST-GROUP` au lieu de comparer la
+zone — et ça évite les valeurs magiques dispersées dans le code.
 
 **Pourquoi ça marche sans trier le fichier ?**
 Parce que le fichier d'entrée est déjà ordonné par user puis par
@@ -122,3 +71,15 @@ bas pour attraper un brute-force, assez haut pour ne pas alerter sur
 une simple faute de frappe. En production on le règle avec les
 données réelles — et c'est une constante nommée, donc un seul
 endroit à changer.
+
+**Qu'est-ce qui manque pour que ce soit "production" ?**
+La corrélation multi-sources (IP, plusieurs comptes), la fenêtre
+glissante, l'envoi réel vers un SIEM, et les tests automatisés.
+C'est un projet d'apprentissage — je le dis honnêtement, je ne
+prétends pas à une expérience mainframe.
+
+## Numbers to remember
+
+- 13 lignes lues : 5 groupes user/jour, 1 alerte, 1 ligne invalide
+- `bennis` 15/11 : 4 tentatives, 3 KO → ALERT
+- Seuil : 3 échecs (`WS-THRESHOLD VALUE 3`)
